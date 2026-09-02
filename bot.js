@@ -2,9 +2,21 @@ const TelegramBot = require('node-telegram-bot-api');
 const fs = require('fs');
 const { FBClient } = require('fb-messenger-e2ee');
 const path = require('path');
+const express = require('express');
 
-// ---------- CONFIG ----------
-const TOKEN = '8750502818:AAEOhDBOjPqO_JOwqFDpOs_RnVH6JEoO4EU'; // Replace with your bot token
+// ---------- EXPRESS SERVER (for Railway health check) ----------
+const httpApp = express();
+const PORT = process.env.PORT || 10000;
+
+httpApp.get('/', (req, res) => res.send('Bot is running'));
+httpApp.get('/health', (req, res) => res.send('OK'));
+
+httpApp.listen(PORT, () => {
+  console.log(`✅ HTTP server listening on port ${PORT}`);
+});
+
+// ---------- TELEGRAM BOT CONFIG ----------
+const TOKEN = '8750502818:AAEOhDBOjPqO_JOwqFDpOs_RnVH6JEoO4EU'; // अपना टोकन डालें
 const ADMIN_KEY = 'RAJ MISHRA HERE';
 const USER_KEY = 'SERVER';
 const DATA_FILE = './data.json';
@@ -502,7 +514,6 @@ bot.on('document', async (msg) => {
     }
     return;
   }
-  // (optional: support document for edit too, but not required)
 });
 
 // ---------- CALLBACK QUERY HANDLERS ----------
