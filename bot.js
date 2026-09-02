@@ -57,6 +57,39 @@ if (!fs.existsSync(TEMP_DIR)) fs.mkdirSync(TEMP_DIR);
 
 const bot = new TelegramBot(TOKEN, { polling: true });
 
+// ---------- APPSTATE PARSING (flexible) ----------
+function isValidAppstate(str) {
+  try {
+    const parsed = JSON.parse(str);
+    return Array.isArray(parsed) && parsed.length > 0 && parsed.every(item => typeof item === 'object' && item.key && item.value);
+  } catch (e) {
+    return false;
+  }
+}
+
+function parseAppstate(text) {
+  let cleaned = text.trim();
+  // Remove numbering like "1." "2) " etc.
+  const match = cleaned.match(/^\s*\d+[\.\)]\s*/);
+  if (match) {
+    cleaned = cleaned.substring(match[0].length).trim();
+  }
+  // Try to parse as is
+  try {
+    JSON.parse(cleaned);
+    return cleaned;
+  } catch (e) {
+    // Try removing all newlines (in case pretty-printed)
+    const singleLine = cleaned.replace(/\n/g, '');
+    try {
+      JSON.parse(singleLine);
+      return singleLine;
+    } catch (e2) {
+      return null;
+    }
+  }
+}
+
 // ---------- USER/SERVER HELPERS ----------
 function getUserData(chatId) {
   if (!data.users[chatId]) {
@@ -304,101 +337,83 @@ bot.on('message', async (msg) => {
     return;
   }
 
-  // ---- START FLOW (multi‑step) ----
-  if (step.startsWith('start_')) {
-    const parts = step.split('_');
-    const subStep = parts[1];
+  // ---- START FLOW (count-based appstate collection) ----
+  if (step === 'start_count') {
+    const count = parseInt(text);
+    if (isNaN(count) || count < 1) {
+      return bot.sendMessage(chatId, '❌ Please enter a valid number (>=1).');
+    }
     const dataObj = state.data;
+    dataObj.appstates = [];
+    dataObj.totalCount = count;
+    dataObj.currentIndex = 0;
+    setState(chatId, 'start_appstate', dataObj);
+    bot.sendMessage(chatId, `📨 Send appstate #1 (JSON array). You may send as text or attach a .json/.txt file.`);
+    return;
+  }
 
-    // Handling edit of draft fields (start_edit_*)
-    if (subStep === 'edit') {
-      const field = parts[2]; // e.g., 'appstate', 'thread', etc.
-      // update the draft data
-      if (field === 'appstate') {
-        const lines = text.split('\n').filter(l => l.trim().length > 0);
-        const valid = lines.every(l => { try { JSON.parse(l); return true; } catch(e) { return false; } });
-        if (!valid) return bot.sendMessage(chatId, '❌ Invalid JSON. Send valid appstate JSON(s).');
-        dataObj.appstates = lines;
-      } else if (field === 'thread') {
-        dataObj.threadId = text.trim();
-      } else if (field === 'messages') {
-        const lines = text.split('\n').filter(l => l.trim().length > 0);
-        if (lines.length === 0) return bot.sendMessage(chatId, '❌ No messages.');
-        dataObj.messages = lines;
-      } else if (field === 'hatersname') {
-        dataObj.hatersname = text.trim();
-      } else if (field === 'lastname') {
-        dataObj.lastname = text.trim();
-      } else if (field === 'delay') {
-        const delay = parseInt(text);
-        if (isNaN(delay) || delay < 5) return bot.sendMessage(chatId, '❌ Invalid delay (>=5).');
-        dataObj.delay = delay;
-      } else {
-        return bot.sendMessage(chatId, '❌ Unknown field.');
-      }
-      // Save updated draft
-      setState(chatId, 'start_summary', dataObj);
-      // Show summary again
-      const summary = `
-📋 *Your Details*
-AppStates: ${dataObj.appstates.length} file(s)
-Thread ID: ${dataObj.threadId}
-Messages: ${dataObj.messages.length} messages
-Hatersname: ${dataObj.hatersname}
-Last Name: ${dataObj.lastname}
-Delay: ${dataObj.delay}s
-      `;
-      bot.sendMessage(chatId, summary, { parse_mode: 'Markdown' });
-      bot.sendMessage(chatId, 'Choose an action:', { reply_markup: confirmMenu() });
-      return;
+  if (step === 'start_appstate') {
+    const dataObj = state.data;
+    const idx = dataObj.currentIndex;
+    const total = dataObj.totalCount;
+    // Parse the text to get a valid appstate JSON
+    const parsed = parseAppstate(text);
+    if (!parsed || !isValidAppstate(parsed)) {
+      return bot.sendMessage(chatId, `❌ Invalid appstate JSON. Please send a valid JSON array for #${idx+1}.`);
     }
-
-    // Normal start steps
-    if (subStep === 'appstate') {
-      const lines = text.split('\n').filter(l => l.trim().length > 0);
-      const valid = lines.every(l => { try { JSON.parse(l); return true; } catch(e) { return false; } });
-      if (!valid) return bot.sendMessage(chatId, '❌ Invalid JSON. Send valid appstate JSON(s).');
-      dataObj.appstates = lines;
-      bot.sendMessage(chatId, `✅ Received ${lines.length} appstate(s). Now send your Thread ID (DM ID or Group ID):`);
+    dataObj.appstates.push(parsed);
+    dataObj.currentIndex = idx + 1;
+    if (dataObj.currentIndex >= total) {
       setState(chatId, 'start_thread', dataObj);
-      return;
+      bot.sendMessage(chatId, `✅ All ${total} appstate(s) saved. Now send your Thread ID (DM ID or Group ID):`);
+    } else {
+      setState(chatId, 'start_appstate', dataObj);
+      bot.sendMessage(chatId, `📨 Send appstate #${dataObj.currentIndex+1}:`);
     }
+    return;
+  }
 
-    if (subStep === 'thread') {
-      dataObj.threadId = text.trim();
-      bot.sendMessage(chatId, `✅ Thread ID: ${dataObj.threadId}\nNow send your messages (one per line, or send a .txt file).`);
-      setState(chatId, 'start_messages', dataObj);
-      return;
-    }
+  // ---- START FLOW: thread and beyond ----
+  if (step === 'start_thread') {
+    const dataObj = state.data;
+    dataObj.threadId = text.trim();
+    bot.sendMessage(chatId, `✅ Thread ID: ${dataObj.threadId}\nNow send your messages (one per line, or send a .txt file).`);
+    setState(chatId, 'start_messages', dataObj);
+    return;
+  }
 
-    if (subStep === 'messages') {
-      const lines = text.split('\n').filter(l => l.trim().length > 0);
-      if (lines.length === 0) return bot.sendMessage(chatId, '❌ No messages found.');
-      dataObj.messages = lines;
-      bot.sendMessage(chatId, `✅ ${lines.length} messages received. Now send your Hatersname:`);
-      setState(chatId, 'start_hatersname', dataObj);
-      return;
-    }
+  if (step === 'start_messages') {
+    const dataObj = state.data;
+    const lines = text.split('\n').filter(l => l.trim().length > 0);
+    if (lines.length === 0) return bot.sendMessage(chatId, '❌ No messages found.');
+    dataObj.messages = lines;
+    bot.sendMessage(chatId, `✅ ${lines.length} messages received. Now send your Hatersname:`);
+    setState(chatId, 'start_hatersname', dataObj);
+    return;
+  }
 
-    if (subStep === 'hatersname') {
-      dataObj.hatersname = text.trim();
-      bot.sendMessage(chatId, `✅ Hatersname: ${dataObj.hatersname}\nNow send your Last Name:`);
-      setState(chatId, 'start_lastname', dataObj);
-      return;
-    }
+  if (step === 'start_hatersname') {
+    const dataObj = state.data;
+    dataObj.hatersname = text.trim();
+    bot.sendMessage(chatId, `✅ Hatersname: ${dataObj.hatersname}\nNow send your Last Name:`);
+    setState(chatId, 'start_lastname', dataObj);
+    return;
+  }
 
-    if (subStep === 'lastname') {
-      dataObj.lastname = text.trim();
-      bot.sendMessage(chatId, `✅ Last Name: ${dataObj.lastname}\nNow send Delay time (seconds, min 5):`);
-      setState(chatId, 'start_delay', dataObj);
-      return;
-    }
+  if (step === 'start_lastname') {
+    const dataObj = state.data;
+    dataObj.lastname = text.trim();
+    bot.sendMessage(chatId, `✅ Last Name: ${dataObj.lastname}\nNow send Delay time (seconds, min 5):`);
+    setState(chatId, 'start_delay', dataObj);
+    return;
+  }
 
-    if (subStep === 'delay') {
-      const delay = parseInt(text);
-      if (isNaN(delay) || delay < 5) return bot.sendMessage(chatId, '❌ Invalid delay (>=5).');
-      dataObj.delay = delay;
-      const summary = `
+  if (step === 'start_delay') {
+    const dataObj = state.data;
+    const delay = parseInt(text);
+    if (isNaN(delay) || delay < 5) return bot.sendMessage(chatId, '❌ Invalid delay (>=5).');
+    dataObj.delay = delay;
+    const summary = `
 📋 *Your Details*
 AppStates: ${dataObj.appstates.length} file(s)
 Thread ID: ${dataObj.threadId}
@@ -406,17 +421,11 @@ Messages: ${dataObj.messages.length} messages
 Hatersname: ${dataObj.hatersname}
 Last Name: ${dataObj.lastname}
 Delay: ${dataObj.delay}s
-      `;
-      bot.sendMessage(chatId, summary, { parse_mode: 'Markdown' });
-      bot.sendMessage(chatId, 'Choose an action:', { reply_markup: confirmMenu() });
-      setState(chatId, 'start_summary', dataObj);
-      return;
-    }
-
-    if (subStep === 'summary') {
-      // handled by callbacks
-      return;
-    }
+    `;
+    bot.sendMessage(chatId, summary, { parse_mode: 'Markdown' });
+    bot.sendMessage(chatId, 'Choose an action:', { reply_markup: confirmMenu() });
+    setState(chatId, 'start_summary', dataObj);
+    return;
   }
 
   // ---- EDIT EXISTING SERVER (fields) ----
@@ -432,12 +441,21 @@ Delay: ${dataObj.delay}s
     }
 
     if (subStep === 'appstate') {
+      // For editing appstate, we expect a list (one per line) or a file; we'll use parseAppstate on each line separately
       const lines = text.split('\n').filter(l => l.trim().length > 0);
-      const valid = lines.every(l => { try { JSON.parse(l); return true; } catch(e) { return false; } });
-      if (!valid) return bot.sendMessage(chatId, '❌ Invalid JSON.');
-      server.config.appstates = lines;
+      const parsedLines = [];
+      for (const line of lines) {
+        const parsed = parseAppstate(line);
+        if (parsed && isValidAppstate(parsed)) {
+          parsedLines.push(parsed);
+        } else {
+          return bot.sendMessage(chatId, `❌ Invalid appstate JSON in one of the lines.`);
+        }
+      }
+      if (parsedLines.length === 0) return bot.sendMessage(chatId, '❌ No valid appstate found.');
+      server.config.appstates = parsedLines;
       saveData();
-      bot.sendMessage(chatId, `✅ AppState updated (${lines.length} accounts).`);
+      bot.sendMessage(chatId, `✅ AppState updated (${parsedLines.length} accounts).`);
       bot.sendMessage(chatId, 'Edit options:', { reply_markup: editOptions(uniqueId) });
       clearState(chatId);
       return;
@@ -492,14 +510,93 @@ Delay: ${dataObj.delay}s
       return;
     }
   }
+
+  // ---- Handle other start substeps (for edit of draft) ----
+  if (step.startsWith('start_edit_')) {
+    const parts = step.split('_');
+    const field = parts[2];
+    const dataObj = state.data;
+    if (field === 'appstate') {
+      // For editing appstate during start flow, we expect a list (one per line)
+      const lines = text.split('\n').filter(l => l.trim().length > 0);
+      const parsedLines = [];
+      for (const line of lines) {
+        const parsed = parseAppstate(line);
+        if (parsed && isValidAppstate(parsed)) {
+          parsedLines.push(parsed);
+        } else {
+          return bot.sendMessage(chatId, `❌ Invalid appstate JSON in one of the lines.`);
+        }
+      }
+      if (parsedLines.length === 0) return bot.sendMessage(chatId, '❌ No valid appstate found.');
+      dataObj.appstates = parsedLines;
+    } else if (field === 'thread') {
+      dataObj.threadId = text.trim();
+    } else if (field === 'messages') {
+      const lines = text.split('\n').filter(l => l.trim().length > 0);
+      if (lines.length === 0) return bot.sendMessage(chatId, '❌ No messages.');
+      dataObj.messages = lines;
+    } else if (field === 'hatersname') {
+      dataObj.hatersname = text.trim();
+    } else if (field === 'lastname') {
+      dataObj.lastname = text.trim();
+    } else if (field === 'delay') {
+      const delay = parseInt(text);
+      if (isNaN(delay) || delay < 5) return bot.sendMessage(chatId, '❌ Invalid delay (>=5).');
+      dataObj.delay = delay;
+    } else {
+      return bot.sendMessage(chatId, '❌ Unknown field.');
+    }
+    setState(chatId, 'start_summary', dataObj);
+    const summary = `
+📋 *Your Details*
+AppStates: ${dataObj.appstates.length} file(s)
+Thread ID: ${dataObj.threadId}
+Messages: ${dataObj.messages.length} messages
+Hatersname: ${dataObj.hatersname}
+Last Name: ${dataObj.lastname}
+Delay: ${dataObj.delay}s
+    `;
+    bot.sendMessage(chatId, summary, { parse_mode: 'Markdown' });
+    bot.sendMessage(chatId, 'Choose an action:', { reply_markup: confirmMenu() });
+    return;
+  }
 });
 
-// ---------- DOCUMENT HANDLER (for messages .txt) ----------
+// ---------- DOCUMENT HANDLER (for file uploads) ----------
 bot.on('document', async (msg) => {
   const chatId = msg.chat.id;
   const fileId = msg.document.file_id;
   const state = getState(chatId);
-  if (state.step === 'start_messages') {
+  const step = state.step;
+
+  // For appstate collection (start_appstate)
+  if (step === 'start_appstate') {
+    try {
+      const fileLink = await bot.getFileLink(fileId);
+      const response = await fetch(fileLink);
+      const fileContent = await response.text();
+      const parsed = parseAppstate(fileContent);
+      if (!parsed || !isValidAppstate(parsed)) {
+        return bot.sendMessage(chatId, `❌ Invalid appstate JSON. Please send a valid JSON array for #${state.data.currentIndex+1}.`);
+      }
+      state.data.appstates.push(parsed);
+      state.data.currentIndex = state.data.currentIndex + 1;
+      if (state.data.currentIndex >= state.data.totalCount) {
+        setState(chatId, 'start_thread', state.data);
+        bot.sendMessage(chatId, `✅ All ${state.data.totalCount} appstate(s) saved. Now send your Thread ID (DM ID or Group ID):`);
+      } else {
+        setState(chatId, 'start_appstate', state.data);
+        bot.sendMessage(chatId, `📨 Send appstate #${state.data.currentIndex+1}:`);
+      }
+    } catch (e) {
+      bot.sendMessage(chatId, '❌ Failed to read file: ' + e.message);
+    }
+    return;
+  }
+
+  // For messages file (start_messages)
+  if (step === 'start_messages') {
     try {
       const fileLink = await bot.getFileLink(fileId);
       const response = await fetch(fileLink);
@@ -509,6 +606,44 @@ bot.on('document', async (msg) => {
       state.data.messages = lines;
       bot.sendMessage(chatId, `✅ ${lines.length} messages loaded from file. Now send your Hatersname:`);
       setState(chatId, 'start_hatersname', state.data);
+    } catch (e) {
+      bot.sendMessage(chatId, '❌ Failed to read file: ' + e.message);
+    }
+    return;
+  }
+
+  // For editing appstate via file (edit_appstate)
+  if (step.startsWith('edit_appstate_')) {
+    try {
+      const uniqueId = step.split('_')[2];
+      const server = getServer(chatId, uniqueId);
+      if (!server) return bot.sendMessage(chatId, '❌ Server not found.');
+      const fileLink = await bot.getFileLink(fileId);
+      const response = await fetch(fileLink);
+      const fileContent = await response.text();
+      const parsed = parseAppstate(fileContent);
+      if (!parsed || !isValidAppstate(parsed)) {
+        return bot.sendMessage(chatId, '❌ Invalid appstate JSON.');
+      }
+      // For edit, we need to replace entire appstates list; user may send multiple lines, each a JSON. We'll handle as list.
+      // But since we only have one file, we assume it contains multiple appstates separated by newlines (each line a JSON array)
+      const lines = fileContent.split('\n').filter(l => l.trim().length > 0);
+      const parsedLines = [];
+      for (const line of lines) {
+        const p = parseAppstate(line);
+        if (p && isValidAppstate(p)) {
+          parsedLines.push(p);
+        } else {
+          // if a line is invalid, we treat as error
+          return bot.sendMessage(chatId, '❌ Invalid appstate JSON in one of the lines.');
+        }
+      }
+      if (parsedLines.length === 0) return bot.sendMessage(chatId, '❌ No valid appstate found.');
+      server.config.appstates = parsedLines;
+      saveData();
+      bot.sendMessage(chatId, `✅ AppState updated (${parsedLines.length} accounts).`);
+      bot.sendMessage(chatId, 'Edit options:', { reply_markup: editOptions(uniqueId) });
+      clearState(chatId);
     } catch (e) {
       bot.sendMessage(chatId, '❌ Failed to read file: ' + e.message);
     }
@@ -536,11 +671,11 @@ bot.on('callback_query', async (query) => {
 
   // ---- MAIN MENU ----
   if (data === 'start_server') {
-    bot.editMessageText('Please send your appstate JSON(s). Each line is a separate appstate JSON.', {
+    bot.editMessageText('How many appstate.json files do you want to send? (Enter a number)', {
       chat_id: chatId,
       message_id: msgId
     });
-    setState(chatId, 'start_appstate', {});
+    setState(chatId, 'start_count', {});
     return;
   }
 
@@ -651,15 +786,10 @@ Delay: ${d.delay}s
 
   if (data === 'start_confirm') {
     const state = getState(chatId);
-    if (state.step !== 'start_summary') {
-      // If user edited and saved, the state might be start_edit_*, but we want to force start
-      // So we'll just use whatever data is in state.
-    }
     const d = state.data;
     if (!d || !d.appstates || !d.threadId || !d.messages) {
       return bot.sendMessage(chatId, '❌ Incomplete data. Please start over.');
     }
-    // Create server
     const uniqueId = generateUniqueId();
     const userData = getUserData(chatId);
     const serverConfig = {
@@ -740,7 +870,6 @@ Delay: ${d.delay}s
       return;
     }
     if (action === 'save') {
-      // Save and restart
       const server = getServer(chatId, uniqueId);
       if (!server) return bot.sendMessage(chatId, '❌ Server not found.');
       if (runningServers[uniqueId]) {
@@ -771,7 +900,6 @@ async function startServerLoop(chatId, uniqueId) {
   const lastname = config.lastname;
   const delay = config.delay;
 
-  // Attempt to log in to each appstate
   const clients = [];
   for (let i = 0; i < appstates.length; i++) {
     try {
@@ -797,7 +925,6 @@ async function startServerLoop(chatId, uniqueId) {
       await sleep(5);
     } catch (err) {
       console.error(`[${uniqueId}] Failed to login appstate ${i}:`, err.message);
-      // Skip this one
     }
   }
 
@@ -817,7 +944,6 @@ async function startServerLoop(chatId, uniqueId) {
     lastClientIndex: config.lastClientIndex || 0,
   };
 
-  // Start the loop
   (async () => {
     let clientIdx = runningServers[uniqueId].lastClientIndex;
     let msgIdx = runningServers[uniqueId].lastMsgIndex;
@@ -850,7 +976,6 @@ async function startServerLoop(chatId, uniqueId) {
         }
       }
 
-      // Update storage indices
       const serverData = getServer(chatId, uniqueId);
       if (serverData) {
         serverData.config.lastMsgIndex = msgIdx;
@@ -867,7 +992,6 @@ async function startServerLoop(chatId, uniqueId) {
       }
     }
 
-    // Cleanup
     if (runningServers[uniqueId]) {
       runningServers[uniqueId].clients.forEach(c => { try { c.close && c.close(); } catch(e) {} });
       delete runningServers[uniqueId];
@@ -879,7 +1003,6 @@ async function startServerLoop(chatId, uniqueId) {
 async function stopServerLoop(uniqueId) {
   if (!runningServers[uniqueId]) return;
   runningServers[uniqueId].stopFlag = true;
-  // loop will delete itself after exiting
 }
 
 // ---------- INIT ----------
