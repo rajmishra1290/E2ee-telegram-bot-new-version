@@ -9,7 +9,7 @@
   "dependencies": {
     "dotenv": "^16.4.5",
     "node-telegram-bot-api": "^0.66.0",
-    "fb-messenger-e2ee": "^1.3.0"
+    "fb-messenger-e2ee": "latest"
   },
   "engines": {
     "node": ">=18.0.0"
