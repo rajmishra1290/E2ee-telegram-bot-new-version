@@ -8,7 +8,8 @@
   },
   "dependencies": {
     "node-telegram-bot-api": "^0.66.0",
-    "fb-messenger-e2ee": "^0.1.7"
+    "fb-messenger-e2ee": "^0.1.7",
+    "express": "^4.18.2"
   },
   "engines": {
     "node": ">=18.0.0"
