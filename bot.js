@@ -1,31 +1,14 @@
-require('dotenv').config();
 const TelegramBot = require('node-telegram-bot-api');
 const fs = require('fs');
 const { FBClient } = require('fb-messenger-e2ee');
 const path = require('path');
-const http = require('http');
 
-// ---------- CONFIG FROM ENV ----------
-const TOKEN = process.env.BOT_TOKEN;
-const ADMIN_KEY = process.env.ADMIN_KEY || 'RAJ MISHRA HERE';
-const USER_KEY = process.env.USER_KEY || 'SERVER';
+// ---------- CONFIG ----------
+const TOKEN = '8750502818:AAEOhDBOjPqO_JOwqFDpOs_RnVH6JEoO4EU'; // Replace with your bot token
+const ADMIN_KEY = 'RAJ MISHRA HERE';
+const USER_KEY = 'SERVER';
 const DATA_FILE = './data.json';
 const TEMP_DIR = './temp_sessions';
-
-if (!TOKEN) {
-  console.error('❌ BOT_TOKEN environment variable is required!');
-  process.exit(1);
-}
-
-// ---------- DUMMY HTTP SERVER (for Railway/Render) ----------
-const server = http.createServer((req, res) => {
-  res.writeHead(200, { 'Content-Type': 'text/plain' });
-  res.end('Bot is running!');
-});
-const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
-  console.log(`✅ Dummy HTTP server running on port ${PORT}`);
-});
 
 // ---------- STATE ----------
 let data = { users: {} };
@@ -47,6 +30,10 @@ function generateUniqueId() {
   return `raj${rand}`;
 }
 
+function getISTDate() {
+  return new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
+}
+
 function daysRunning(startDate) {
   const start = new Date(startDate);
   const now = new Date();
@@ -54,7 +41,7 @@ function daysRunning(startDate) {
   return Math.floor(diff / (1000 * 60 * 60 * 24));
 }
 
-if (!fs.existsSync(TEMP_DIR)) fs.mkdirSync(TEMP_DIR, { recursive: true });
+if (!fs.existsSync(TEMP_DIR)) fs.mkdirSync(TEMP_DIR);
 
 const bot = new TelegramBot(TOKEN, { polling: true });
 
@@ -181,7 +168,9 @@ bot.onText(/\/status (.+)/, async (msg, match) => {
   const chatId = msg.chat.id;
   const uniqueId = match[1].trim();
   const server = getServer(chatId, uniqueId);
-  if (!server) return bot.sendMessage(chatId, '❌ Server not found.');
+  if (!server) {
+    return bot.sendMessage(chatId, '❌ Server not found.');
+  }
   const running = runningServers[uniqueId] ? '🟢 Running' : '🔴 Stopped';
   const days = daysRunning(server.config.startDate);
   const lastMsg = server.config.lastMsgIndex !== undefined ? server.config.messages[server.config.lastMsgIndex] : 'N/A';
@@ -202,8 +191,12 @@ bot.onText(/\/restart (.+)/, async (msg, match) => {
   const chatId = msg.chat.id;
   const uniqueId = match[1].trim();
   const server = getServer(chatId, uniqueId);
-  if (!server) return bot.sendMessage(chatId, '❌ Server not found.');
-  if (runningServers[uniqueId]) await stopServerLoop(uniqueId);
+  if (!server) {
+    return bot.sendMessage(chatId, '❌ Server not found.');
+  }
+  if (runningServers[uniqueId]) {
+    await stopServerLoop(uniqueId);
+  }
   await startServerLoop(chatId, uniqueId);
   bot.sendMessage(chatId, `✅ Server ${uniqueId} restarted.`);
 });
@@ -256,7 +249,9 @@ bot.on('message', async (msg) => {
   if (step === 'stop_await_id') {
     const uniqueId = text.trim();
     const server = getServer(chatId, uniqueId);
-    if (!server) return bot.sendMessage(chatId, '❌ Server not found.');
+    if (!server) {
+      return bot.sendMessage(chatId, '❌ Server not found.');
+    }
     if (runningServers[uniqueId]) {
       await stopServerLoop(uniqueId);
       bot.sendMessage(chatId, `✅ Server ${uniqueId} stopped.`);
@@ -271,7 +266,9 @@ bot.on('message', async (msg) => {
   if (step === 'edit_await_id') {
     const uniqueId = text.trim();
     const server = getServer(chatId, uniqueId);
-    if (!server) return bot.sendMessage(chatId, '❌ Server not found.');
+    if (!server) {
+      return bot.sendMessage(chatId, '❌ Server not found.');
+    }
     bot.sendMessage(chatId, `Editing server ${uniqueId}. Choose what to edit:`, {
       reply_markup: editOptions(uniqueId)
     });
@@ -282,8 +279,12 @@ bot.on('message', async (msg) => {
   if (step === 'delete_await_id') {
     const uniqueId = text.trim();
     const server = getServer(chatId, uniqueId);
-    if (!server) return bot.sendMessage(chatId, '❌ Server not found.');
-    if (runningServers[uniqueId]) await stopServerLoop(uniqueId);
+    if (!server) {
+      return bot.sendMessage(chatId, '❌ Server not found.');
+    }
+    if (runningServers[uniqueId]) {
+      await stopServerLoop(uniqueId);
+    }
     deleteServer(chatId, uniqueId);
     bot.sendMessage(chatId, `✅ Server ${uniqueId} deleted.`);
     clearState(chatId);
@@ -299,11 +300,12 @@ bot.on('message', async (msg) => {
 
     // Handling edit of draft fields (start_edit_*)
     if (subStep === 'edit') {
-      const field = parts[2];
+      const field = parts[2]; // e.g., 'appstate', 'thread', etc.
+      // update the draft data
       if (field === 'appstate') {
         const lines = text.split('\n').filter(l => l.trim().length > 0);
         const valid = lines.every(l => { try { JSON.parse(l); return true; } catch(e) { return false; } });
-        if (!valid) return bot.sendMessage(chatId, '❌ Invalid JSON.');
+        if (!valid) return bot.sendMessage(chatId, '❌ Invalid JSON. Send valid appstate JSON(s).');
         dataObj.appstates = lines;
       } else if (field === 'thread') {
         dataObj.threadId = text.trim();
@@ -322,7 +324,9 @@ bot.on('message', async (msg) => {
       } else {
         return bot.sendMessage(chatId, '❌ Unknown field.');
       }
+      // Save updated draft
       setState(chatId, 'start_summary', dataObj);
+      // Show summary again
       const summary = `
 📋 *Your Details*
 AppStates: ${dataObj.appstates.length} file(s)
@@ -341,46 +345,46 @@ Delay: ${dataObj.delay}s
     if (subStep === 'appstate') {
       const lines = text.split('\n').filter(l => l.trim().length > 0);
       const valid = lines.every(l => { try { JSON.parse(l); return true; } catch(e) { return false; } });
-      if (!valid) return bot.sendMessage(chatId, '❌ Invalid JSON.');
+      if (!valid) return bot.sendMessage(chatId, '❌ Invalid JSON. Send valid appstate JSON(s).');
       dataObj.appstates = lines;
-      bot.sendMessage(chatId, `✅ Received ${lines.length} appstate(s). Now send your Thread ID:`);
+      bot.sendMessage(chatId, `✅ Received ${lines.length} appstate(s). Now send your Thread ID (DM ID or Group ID):`);
       setState(chatId, 'start_thread', dataObj);
       return;
     }
 
     if (subStep === 'thread') {
       dataObj.threadId = text.trim();
-      bot.sendMessage(chatId, `✅ Thread ID: ${dataObj.threadId}\nNow send your messages (one per line, or .txt file).`);
+      bot.sendMessage(chatId, `✅ Thread ID: ${dataObj.threadId}\nNow send your messages (one per line, or send a .txt file).`);
       setState(chatId, 'start_messages', dataObj);
       return;
     }
 
     if (subStep === 'messages') {
       const lines = text.split('\n').filter(l => l.trim().length > 0);
-      if (lines.length === 0) return bot.sendMessage(chatId, '❌ No messages.');
+      if (lines.length === 0) return bot.sendMessage(chatId, '❌ No messages found.');
       dataObj.messages = lines;
-      bot.sendMessage(chatId, `✅ ${lines.length} messages. Now send Hatersname:`);
+      bot.sendMessage(chatId, `✅ ${lines.length} messages received. Now send your Hatersname:`);
       setState(chatId, 'start_hatersname', dataObj);
       return;
     }
 
     if (subStep === 'hatersname') {
       dataObj.hatersname = text.trim();
-      bot.sendMessage(chatId, `✅ Hatersname: ${dataObj.hatersname}\nNow send Last Name:`);
+      bot.sendMessage(chatId, `✅ Hatersname: ${dataObj.hatersname}\nNow send your Last Name:`);
       setState(chatId, 'start_lastname', dataObj);
       return;
     }
 
     if (subStep === 'lastname') {
       dataObj.lastname = text.trim();
-      bot.sendMessage(chatId, `✅ Last Name: ${dataObj.lastname}\nNow send Delay (seconds, min 5):`);
+      bot.sendMessage(chatId, `✅ Last Name: ${dataObj.lastname}\nNow send Delay time (seconds, min 5):`);
       setState(chatId, 'start_delay', dataObj);
       return;
     }
 
     if (subStep === 'delay') {
       const delay = parseInt(text);
-      if (isNaN(delay) || delay < 5) return bot.sendMessage(chatId, '❌ Invalid delay.');
+      if (isNaN(delay) || delay < 5) return bot.sendMessage(chatId, '❌ Invalid delay (>=5).');
       dataObj.delay = delay;
       const summary = `
 📋 *Your Details*
@@ -394,6 +398,11 @@ Delay: ${dataObj.delay}s
       bot.sendMessage(chatId, summary, { parse_mode: 'Markdown' });
       bot.sendMessage(chatId, 'Choose an action:', { reply_markup: confirmMenu() });
       setState(chatId, 'start_summary', dataObj);
+      return;
+    }
+
+    if (subStep === 'summary') {
+      // handled by callbacks
       return;
     }
   }
@@ -425,7 +434,7 @@ Delay: ${dataObj.delay}s
     if (subStep === 'thread') {
       server.config.threadId = text.trim();
       saveData();
-      bot.sendMessage(chatId, `✅ Thread ID updated.`);
+      bot.sendMessage(chatId, `✅ Thread ID updated to: ${server.config.threadId}`);
       bot.sendMessage(chatId, 'Edit options:', { reply_markup: editOptions(uniqueId) });
       clearState(chatId);
       return;
@@ -436,7 +445,7 @@ Delay: ${dataObj.delay}s
       if (lines.length === 0) return bot.sendMessage(chatId, '❌ No messages.');
       server.config.messages = lines;
       saveData();
-      bot.sendMessage(chatId, `✅ Messages updated (${lines.length}).`);
+      bot.sendMessage(chatId, `✅ Messages updated (${lines.length} messages).`);
       bot.sendMessage(chatId, 'Edit options:', { reply_markup: editOptions(uniqueId) });
       clearState(chatId);
       return;
@@ -445,7 +454,7 @@ Delay: ${dataObj.delay}s
     if (subStep === 'hatersname') {
       server.config.hatersname = text.trim();
       saveData();
-      bot.sendMessage(chatId, `✅ Hatersname updated.`);
+      bot.sendMessage(chatId, `✅ Hatersname updated: ${server.config.hatersname}`);
       bot.sendMessage(chatId, 'Edit options:', { reply_markup: editOptions(uniqueId) });
       clearState(chatId);
       return;
@@ -454,7 +463,7 @@ Delay: ${dataObj.delay}s
     if (subStep === 'lastname') {
       server.config.lastname = text.trim();
       saveData();
-      bot.sendMessage(chatId, `✅ Lastname updated.`);
+      bot.sendMessage(chatId, `✅ Lastname updated: ${server.config.lastname}`);
       bot.sendMessage(chatId, 'Edit options:', { reply_markup: editOptions(uniqueId) });
       clearState(chatId);
       return;
@@ -462,7 +471,7 @@ Delay: ${dataObj.delay}s
 
     if (subStep === 'delay') {
       const delay = parseInt(text);
-      if (isNaN(delay) || delay < 5) return bot.sendMessage(chatId, '❌ Invalid delay.');
+      if (isNaN(delay) || delay < 5) return bot.sendMessage(chatId, '❌ Invalid delay (>=5).');
       server.config.delay = delay;
       saveData();
       bot.sendMessage(chatId, `✅ Delay updated to ${delay}s.`);
@@ -473,7 +482,7 @@ Delay: ${dataObj.delay}s
   }
 });
 
-// ---------- DOCUMENT HANDLER ----------
+// ---------- DOCUMENT HANDLER (for messages .txt) ----------
 bot.on('document', async (msg) => {
   const chatId = msg.chat.id;
   const fileId = msg.document.file_id;
@@ -486,12 +495,14 @@ bot.on('document', async (msg) => {
       const lines = text.split('\n').filter(l => l.trim().length > 0);
       if (lines.length === 0) return bot.sendMessage(chatId, '❌ File empty.');
       state.data.messages = lines;
-      bot.sendMessage(chatId, `✅ ${lines.length} messages loaded. Now send Hatersname:`);
+      bot.sendMessage(chatId, `✅ ${lines.length} messages loaded from file. Now send your Hatersname:`);
       setState(chatId, 'start_hatersname', state.data);
     } catch (e) {
       bot.sendMessage(chatId, '❌ Failed to read file: ' + e.message);
     }
+    return;
   }
+  // (optional: support document for edit too, but not required)
 });
 
 // ---------- CALLBACK QUERY HANDLERS ----------
@@ -499,6 +510,7 @@ bot.on('callback_query', async (query) => {
   const chatId = query.message.chat.id;
   const data = query.data;
   const msgId = query.message.message_id;
+
   bot.answerCallbackQuery(query.id);
 
   if (data === 'back_menu') {
@@ -511,6 +523,7 @@ bot.on('callback_query', async (query) => {
     return;
   }
 
+  // ---- MAIN MENU ----
   if (data === 'start_server') {
     bot.editMessageText('Please send your appstate JSON(s). Each line is a separate appstate JSON.', {
       chat_id: chatId,
@@ -547,6 +560,7 @@ bot.on('callback_query', async (query) => {
     return;
   }
 
+  // ---- START FLOW: CHECK FORM / CONFIRM / EDIT MORE ----
   if (data === 'check_form') {
     const state = getState(chatId);
     if (state.step !== 'start_summary') return;
@@ -626,11 +640,15 @@ Delay: ${d.delay}s
 
   if (data === 'start_confirm') {
     const state = getState(chatId);
-    if (state.step !== 'start_summary') return;
+    if (state.step !== 'start_summary') {
+      // If user edited and saved, the state might be start_edit_*, but we want to force start
+      // So we'll just use whatever data is in state.
+    }
     const d = state.data;
     if (!d || !d.appstates || !d.threadId || !d.messages) {
       return bot.sendMessage(chatId, '❌ Incomplete data. Please start over.');
     }
+    // Create server
     const uniqueId = generateUniqueId();
     const userData = getUserData(chatId);
     const serverConfig = {
@@ -711,6 +729,7 @@ Delay: ${d.delay}s
       return;
     }
     if (action === 'save') {
+      // Save and restart
       const server = getServer(chatId, uniqueId);
       if (!server) return bot.sendMessage(chatId, '❌ Server not found.');
       if (runningServers[uniqueId]) {
@@ -849,6 +868,7 @@ async function startServerLoop(chatId, uniqueId) {
 async function stopServerLoop(uniqueId) {
   if (!runningServers[uniqueId]) return;
   runningServers[uniqueId].stopFlag = true;
+  // loop will delete itself after exiting
 }
 
 // ---------- INIT ----------
